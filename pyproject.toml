@@ -1,0 +1,20 @@
+[project]
+name = "claude-code-config"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Ziwei Huang", email = "huang-ziwei@outlook.com" }
+]
+requires-python = ">=3.13"
+dependencies = []
+
+[dependency-groups]
+dev = ["pytest>=9.0.2"]
+
+[project.scripts]
+claude-code-config = "claude_code_config:main"
+
+[build-system]
+requires = ["uv_build>=0.9.22,<0.10.0"]
+build-backend = "uv_build"
