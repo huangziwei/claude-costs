@@ -29,26 +29,23 @@ Opus 4.6 · context: 77% left · $1.26 this session · ~/projects/myapp (main)
 
 ### Session cost logger
 
-A `SessionEnd` hook that parses the session transcript and appends token usage and estimated API cost to `~/.claude/session-costs.csv`:
+The status line also upserts the current session's cost to `~/.claude/session-costs.csv` on every tick, using the authoritative `cost.total_cost_usd` reported by Claude Code. A `SessionEnd` hook stamps the exit reason when the session ends.
 
 ```csv
-timestamp,session_id,project,model,input_tokens,output_tokens,cache_read_tokens,cache_create_5m_tokens,cache_create_1h_tokens,total_tokens,cost_usd,turns,reason
-2026-03-01T12:45:41Z,abc123,myapp,claude-opus-4-6,1200,8500,45000,0,3000,57700,0.2481,12,other
+timestamp,session_id,project,model,cost_usd,reason
+2026-03-01T12:45:41Z,abc123,myapp,claude-opus-4-6,0.2481,prompt_input_exit
 ```
-
-Costs are estimated using current API pricing (not billed to Max/Pro subscribers, but useful for tracking usage).
 
 ## Requirements
 
-- `jq` (used by the status line script)
-- `python3` (used by the cost logger)
+- `python3` (used by the status line and cost logger)
 - `git` (optional, for branch display)
 
 ## Files
 
 | Installed to | Purpose |
 |---|---|
-| `~/.claude/statusline-command.sh` | Status line script |
-| `~/.claude/hooks/session-cost-logger.py` | Session cost logger |
+| `~/.claude/statusline-command.py` | Status line + live cost CSV upsert |
+| `~/.claude/hooks/session-cost-logger.py` | Stamps exit reason on session end |
 | `~/.claude/settings.json` | Merged (not overwritten) |
-| `~/.claude/session-costs.csv` | Accumulated session costs (created on first session end) |
+| `~/.claude/session-costs.csv` | Accumulated session costs (updated live) |
