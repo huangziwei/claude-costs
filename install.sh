@@ -12,7 +12,7 @@ else
   REPO_DIR="$(mktemp -d)"
   trap 'rm -rf "$REPO_DIR"' EXIT
   echo "Downloading config files..."
-  git clone --depth 1 https://github.com/huangziwei/claude-code-config.git "$REPO_DIR" 2>/dev/null
+  git clone --depth 1 https://github.com/huangziwei/claude-costs.git "$REPO_DIR" 2>/dev/null
 fi
 
 CONFIG_DIR="$REPO_DIR/config"
@@ -88,6 +88,6 @@ if command -v claude-costs &>/dev/null; then
   printf "  \033[90m%s\033[0m  %s\n" "claude-costs" "installed (run 'claude-costs' for interactive TUI)"
 else
   printf "\n  To install the cost tracker TUI:\n"
-  printf "    \033[90muv tool install git+https://github.com/huangziwei/claude-code-config.git\033[0m\n"
+  printf "    \033[90muv tool install git+https://github.com/huangziwei/claude-costs.git\033[0m\n"
 fi
 printf "\nSession costs will be logged to \033[90m%s\033[0m\n" "$CLAUDE_DIR/session-costs.csv"

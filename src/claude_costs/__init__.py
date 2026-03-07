@@ -1,5 +1,7 @@
 """Interactive TUI for Claude Code session costs."""
 
+__version__ = "0.2.0"
+
 import argparse
 import csv
 import io
@@ -288,6 +290,9 @@ class CostsApp(App):
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Summarize Claude Code session costs."
+    )
+    parser.add_argument(
+        "-v", "--version", action="version", version=f"%(prog)s {__version__}",
     )
     group = parser.add_mutually_exclusive_group()
     group.add_argument(

@@ -1,7 +1,7 @@
 [project]
-name = "claude-code-config"
-version = "0.1.0"
-description = "Add your description here"
+name = "claude-costs"
+version = "0.2.0"
+description = "Interactive TUI for tracking Claude Code session costs"
 readme = "README.md"
 authors = [
     { name = "Ziwei Huang", email = "huang-ziwei@outlook.com" }
@@ -13,7 +13,7 @@ dependencies = ["textual"]
 dev = ["pytest>=9.0.2"]
 
 [project.scripts]
-claude-costs = "claude_code_config:main"
+claude-costs = "claude_costs:main"
 
 [build-system]
 requires = ["uv_build>=0.9.22,<0.10.0"]

@@ -1,21 +1,42 @@
-# claude-code-config
+# claude-costs
 
-My custom Claude Code enhancements.
+Interactive TUI for tracking Claude Code session costs and token usage.
 
 ## Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/huangziwei/claude-code-config/main/install.sh | bash
+uv tool install git+https://github.com/huangziwei/claude-costs.git
 ```
 
-Or clone and run locally:
+This installs the `claude-costs` command and sets up the status line that logs session data.
+
+Or clone and run the full installer (also configures the status line and settings.json):
 
 ```bash
-git clone https://github.com/huangziwei/claude-code-config.git
-bash claude-code-config/install.sh
+git clone https://github.com/huangziwei/claude-costs.git
+bash claude-costs/install.sh
 ```
 
-The installer should be safe to run multiple times. It merges into your existing `~/.claude/settings.json` without overwriting other settings.
+The installer is safe to run multiple times. It merges into your existing `~/.claude/settings.json` without overwriting other settings.
+
+## Usage
+
+```bash
+claude-costs        # launch interactive TUI (monthly view)
+claude-costs -d     # start with daily view
+claude-costs -w     # start with weekly view
+```
+
+### TUI keybindings
+
+| Key | Action |
+|-----|--------|
+| `m` | Monthly view |
+| `w` | Weekly view |
+| `d` | Daily view |
+| `t` | Toggle between costs and tokens |
+| `r` | Reload data |
+| `q` | Quit |
 
 ## What's included
 
@@ -27,43 +48,25 @@ Shows model, context remaining, session cost, working directory, and git branch:
 Opus 4.6 · context: 77% left · $1.26 this session · ~/projects/myapp (main)
 ```
 
-### Session cost logger
+### Session data logger
 
-The status line also upserts the current session's cost to `~/.claude/session-costs.csv` on every tick, using the authoritative `cost.total_cost_usd` reported by Claude Code.
+The status line upserts the current session's cost and token counts to `~/.claude/session-costs.csv` on every tick.
 
 ```csv
-timestamp,session_id,project,model,cost_usd
-2026-03-01T12:45:41Z,abc123,myapp,claude-opus-4-6,0.2481
-```
-
-### Cost summary
-
-```bash
-python3 ~/.claude/claude-costs.py                 # monthly (default), all projects
-python3 ~/.claude/claude-costs.py -w               # weekly, all projects
-python3 ~/.claude/claude-costs.py -d               # daily, all projects
-python3 ~/.claude/claude-costs.py -m --project myapp  # monthly, one project
-```
-
-```
-2026-03  $   47.23  (12 sessions)
-  claude-code-config  $   31.05  (8 sessions)
-  myapp               $   16.18  (4 sessions)
-
-2026-02  $   25.00  (6 sessions)
-  myapp               $   25.00  (6 sessions)
+timestamp,session_id,project,model,cost_usd,input_tokens,output_tokens
+2026-03-01T12:45:41Z,abc123,myapp,claude-opus-4-6,0.2481,52340,8120
 ```
 
 ## Requirements
 
-- `python3` (used by the status line and cost summary)
-- `git` (optional, for branch display)
+- Python 3.13+
+- [`uv`](https://docs.astral.sh/uv/) (for tool install)
+- `git` (optional, for branch display in status line)
 
 ## Files
 
 | Installed to | Purpose |
 |---|---|
-| `~/.claude/statusline-command.py` | Status line + live cost CSV upsert |
-| `~/.claude/claude-costs.py` | Cost summary CLI |
+| `~/.claude/statusline-command.py` | Status line + live CSV upsert |
 | `~/.claude/settings.json` | Merged (not overwritten) |
-| `~/.claude/session-costs.csv` | Accumulated session costs (updated live) |
+| `~/.claude/session-costs.csv` | Accumulated session data (updated live) |
