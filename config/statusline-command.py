@@ -20,7 +20,6 @@ CSV_FIELDS = [
     "project",
     "model",
     "cost_usd",
-    "reason",
 ]
 
 
@@ -69,7 +68,6 @@ def _upsert_csv(session_id: str, project: str, model: str,
             "project": project,
             "model": model,
             "cost_usd": f"{cost_usd:.4f}",
-            "reason": "",
         })
 
     # Atomic write via temp file + rename.
