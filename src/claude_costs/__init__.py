@@ -286,6 +286,7 @@ class CostsApp(App):
                     ts = srow.get("timestamp", "")
                     try:
                         dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                        dt = dt.astimezone()
                         ts_fmt = dt.strftime("%Y-%m-%d %H:%M")
                     except ValueError:
                         ts_fmt = ts
