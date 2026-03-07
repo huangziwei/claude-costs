@@ -71,7 +71,7 @@ def period_key(timestamp: str, granularity: str) -> str:
 
 def aggregate(rows: list[dict], granularity: str) -> dict:
     data: dict[str, dict[str, dict]] = defaultdict(
-        lambda: defaultdict(lambda: {"cost": 0.0, "sessions": 0, "in_tok": 0, "out_tok": 0})
+        lambda: defaultdict(lambda: {"cost": 0.0, "sessions": 0, "in_tok": 0, "out_tok": 0, "rows": []})
     )
     for row in rows:
         period = period_key(row.get("timestamp", ""), granularity)
@@ -83,6 +83,7 @@ def aggregate(rows: list[dict], granularity: str) -> dict:
         data[period][project]["sessions"] += 1
         data[period][project]["in_tok"] += in_tok
         data[period][project]["out_tok"] += out_tok
+        data[period][project]["rows"].append(row)
     return data
 
 
@@ -275,7 +276,30 @@ class CostsApp(App):
                 if bar:
                     plabel.append(bar, style="magenta")
 
-                node.add_leaf(plabel)
+                proj_node = node.add(plabel, expand=False)
+                for srow in sorted(
+                    p["rows"],
+                    key=lambda r: r.get("timestamp", ""),
+                    reverse=True,
+                ):
+                    slabel = Text()
+                    ts = srow.get("timestamp", "")
+                    try:
+                        dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                        ts_fmt = dt.strftime("%Y-%m-%d %H:%M")
+                    except ValueError:
+                        ts_fmt = ts
+                    scost = float(srow.get("cost_usd", 0))
+                    slabel.append(f"{ts_fmt}", style="dim")
+                    slabel.append(f"  ${scost:>7.2f}", style=_cost_style(scost))
+                    s_in = int(srow.get("input_tokens", 0) or 0)
+                    s_out = int(srow.get("output_tokens", 0) or 0)
+                    if s_in or s_out:
+                        slabel.append(f"  {_tok(s_in)} in / {_tok(s_out)} out", style="blue")
+                    model = srow.get("model", "")
+                    if model:
+                        slabel.append(f"  [{model}]", style="dim italic")
+                    proj_node.add_leaf(slabel)
 
         total_text = Text()
         total_text.append("Total: ", style="bold")

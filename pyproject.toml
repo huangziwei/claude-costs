@@ -1,6 +1,6 @@
 [project]
 name = "claude-costs"
-version = "0.2.0"
+version = "0.2.1"
 description = "Interactive TUI for tracking Claude Code session costs"
 readme = "README.md"
 authors = [

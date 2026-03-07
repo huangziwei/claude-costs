@@ -1,418 +1,267 @@
-"""Tests for session-cost-logger.py.
-
-Verifies that the logger computes correct API costs by asserting hardcoded
-dollar amounts derived from Anthropic's published pricing, NOT by mirroring
-the script's own constants.  If a pricing constant in the script is wrong,
-these tests will catch it.
-
-Pricing source: https://docs.anthropic.com/en/docs/about-claude/pricing
-  Opus 4.6:   $5 / $25 / $0.50 / $6.25 / $10.00 per MTok (input/output/cache_read/5m_write/1h_write)
-  Sonnet 4.6: $3 / $15 / $0.30 / $3.75 / $6.00  per MTok
-  Haiku 4.5:  $1 / $5  / $0.10 / $1.25 / $2.00  per MTok
-"""
+"""Tests for claude_costs data functions and statusline CSV upsert."""
 
 import csv
-import json
 import os
-import subprocess
 import tempfile
-from pathlib import Path
+from unittest.mock import patch
 
-LOGGER_SCRIPT = Path(__file__).resolve().parent.parent / "config" / "hooks" / "session-cost-logger.py"
-
-
-_msg_counter = 0
-
-
-def _make_assistant_entry(
-    model: str,
-    input_tokens: int,
-    output_tokens: int,
-    cache_read: int = 0,
-    cache_5m: int = 0,
-    cache_1h: int = 0,
-    msg_id: str | None = None,
-) -> dict:
-    global _msg_counter
-    if msg_id is None:
-        _msg_counter += 1
-        msg_id = f"msg_{_msg_counter:04d}"
-    return {
-        "type": "assistant",
-        "message": {
-            "id": msg_id,
-            "model": model,
-            "usage": {
-                "input_tokens": input_tokens,
-                "output_tokens": output_tokens,
-                "cache_read_input_tokens": cache_read,
-                "cache_creation_input_tokens": cache_5m + cache_1h,
-                "cache_creation": {
-                    "ephemeral_5m_input_tokens": cache_5m,
-                    "ephemeral_1h_input_tokens": cache_1h,
-                },
-            },
-        },
-    }
-
-
-def _run_logger(transcript_lines: list[dict], cwd: str = "/tmp/test") -> list[dict]:
-    """Write a transcript, run the logger, return parsed CSV rows."""
-    with tempfile.TemporaryDirectory() as tmp:
-        transcript_path = os.path.join(tmp, "transcript.jsonl")
-
-        with open(transcript_path, "w") as f:
-            for entry in transcript_lines:
-                f.write(json.dumps(entry) + "\n")
-
-        hook_input = json.dumps({
-            "session_id": "test-session",
-            "transcript_path": transcript_path,
-            "cwd": cwd,
-            "reason": "test",
-        })
-
-        env = os.environ.copy()
-        env["HOME"] = tmp  # Override HOME so CSV_PATH writes to tmp/.claude/
-        os.makedirs(os.path.join(tmp, ".claude"))
-
-        result = subprocess.run(
-            ["python3", str(LOGGER_SCRIPT)],
-            input=hook_input,
-            capture_output=True,
-            text=True,
-            env=env,
-        )
-        assert result.returncode == 0, f"Logger failed: {result.stderr}"
-
-        csv_file = os.path.join(tmp, ".claude", "session-costs.csv")
-        assert os.path.exists(csv_file), "CSV file was not created"
-
-        with open(csv_file) as f:
-            return list(csv.DictReader(f))
+from claude_costs import aggregate, load_rows, period_key, _cost_style, _sess, _tok
 
 
 # ---------------------------------------------------------------------------
-# Per-model pricing (hardcoded expected dollar amounts)
+# period_key
 # ---------------------------------------------------------------------------
 
-class TestOpusPricing:
-    """Opus 4.6: $5/$25/$0.50/$6.25/$10.00 per MTok."""
+class TestPeriodKey:
+    def test_monthly(self):
+        assert period_key("2026-03-07T16:00:20Z", "monthly") == "2026-03"
 
-    def test_input_tokens(self):
-        rows = _run_logger([_make_assistant_entry("claude-opus-4-6", input_tokens=1_000_000, output_tokens=0)])
-        assert float(rows[0]["cost_usd"]) == 5.0
+    def test_daily(self):
+        assert period_key("2026-03-07T16:00:20Z", "daily") == "2026-03-07"
 
-    def test_output_tokens(self):
-        rows = _run_logger([_make_assistant_entry("claude-opus-4-6", input_tokens=0, output_tokens=1_000_000)])
-        assert float(rows[0]["cost_usd"]) == 25.0
+    def test_weekly(self):
+        result = period_key("2026-03-07T16:00:20Z", "weekly")
+        assert result.startswith("2026-W")
 
-    def test_cache_read(self):
-        rows = _run_logger([_make_assistant_entry("claude-opus-4-6", input_tokens=0, output_tokens=0, cache_read=1_000_000)])
-        assert float(rows[0]["cost_usd"]) == 0.5
+    def test_invalid_timestamp(self):
+        assert period_key("not-a-date", "monthly") == "unknown"
 
-    def test_cache_write_5m(self):
-        rows = _run_logger([_make_assistant_entry("claude-opus-4-6", input_tokens=0, output_tokens=0, cache_5m=1_000_000)])
-        assert float(rows[0]["cost_usd"]) == 6.25
+    def test_utc_suffix(self):
+        assert period_key("2026-01-15T00:00:00Z", "monthly") == "2026-01"
 
-    def test_cache_write_1h(self):
-        rows = _run_logger([_make_assistant_entry("claude-opus-4-6", input_tokens=0, output_tokens=0, cache_1h=1_000_000)])
-        assert float(rows[0]["cost_usd"]) == 10.0
-
-    def test_all_token_types_combined(self):
-        """10K input + 5K output + 200K cache_read + 50K cache_5m + 30K cache_1h."""
-        rows = _run_logger([_make_assistant_entry(
-            "claude-opus-4-6",
-            input_tokens=10_000, output_tokens=5_000,
-            cache_read=200_000, cache_5m=50_000, cache_1h=30_000,
-        )])
-        # (10K*5 + 5K*25 + 200K*0.50 + 50K*6.25 + 30K*10) / 1M
-        # = (50000 + 125000 + 100000 + 312500 + 300000) / 1M = 0.8875
-        assert float(rows[0]["cost_usd"]) == 0.8875
-
-
-class TestSonnetPricing:
-    """Sonnet 4.6: $3/$15/$0.30/$3.75/$6.00 per MTok."""
-
-    def test_input_tokens(self):
-        rows = _run_logger([_make_assistant_entry("claude-sonnet-4-6", input_tokens=1_000_000, output_tokens=0)])
-        assert float(rows[0]["cost_usd"]) == 3.0
-
-    def test_output_tokens(self):
-        rows = _run_logger([_make_assistant_entry("claude-sonnet-4-6", input_tokens=0, output_tokens=1_000_000)])
-        assert float(rows[0]["cost_usd"]) == 15.0
-
-    def test_cache_read(self):
-        rows = _run_logger([_make_assistant_entry("claude-sonnet-4-6", input_tokens=0, output_tokens=0, cache_read=1_000_000)])
-        assert float(rows[0]["cost_usd"]) == 0.3
-
-    def test_cache_write_5m(self):
-        rows = _run_logger([_make_assistant_entry("claude-sonnet-4-6", input_tokens=0, output_tokens=0, cache_5m=1_000_000)])
-        assert float(rows[0]["cost_usd"]) == 3.75
-
-    def test_cache_write_1h(self):
-        rows = _run_logger([_make_assistant_entry("claude-sonnet-4-6", input_tokens=0, output_tokens=0, cache_1h=1_000_000)])
-        assert float(rows[0]["cost_usd"]) == 6.0
-
-    def test_all_token_types_combined(self):
-        """100K input + 50K output + 500K cache_read + 100K cache_5m + 50K cache_1h."""
-        rows = _run_logger([_make_assistant_entry(
-            "claude-sonnet-4-6",
-            input_tokens=100_000, output_tokens=50_000,
-            cache_read=500_000, cache_5m=100_000, cache_1h=50_000,
-        )])
-        # (100K*3 + 50K*15 + 500K*0.30 + 100K*3.75 + 50K*6) / 1M
-        # = (300000 + 750000 + 150000 + 375000 + 300000) / 1M = 1.875
-        assert float(rows[0]["cost_usd"]) == 1.875
-
-
-class TestHaikuPricing:
-    """Haiku 4.5: $1/$5/$0.10/$1.25/$2.00 per MTok."""
-
-    def test_input_tokens(self):
-        rows = _run_logger([_make_assistant_entry("claude-haiku-4-5-20251001", input_tokens=1_000_000, output_tokens=0)])
-        assert float(rows[0]["cost_usd"]) == 1.0
-
-    def test_output_tokens(self):
-        rows = _run_logger([_make_assistant_entry("claude-haiku-4-5-20251001", input_tokens=0, output_tokens=1_000_000)])
-        assert float(rows[0]["cost_usd"]) == 5.0
-
-    def test_cache_read(self):
-        rows = _run_logger([_make_assistant_entry("claude-haiku-4-5-20251001", input_tokens=0, output_tokens=0, cache_read=1_000_000)])
-        assert float(rows[0]["cost_usd"]) == 0.1
-
-    def test_cache_write_5m(self):
-        rows = _run_logger([_make_assistant_entry("claude-haiku-4-5-20251001", input_tokens=0, output_tokens=0, cache_5m=1_000_000)])
-        assert float(rows[0]["cost_usd"]) == 1.25
-
-    def test_cache_write_1h(self):
-        rows = _run_logger([_make_assistant_entry("claude-haiku-4-5-20251001", input_tokens=0, output_tokens=0, cache_1h=1_000_000)])
-        assert float(rows[0]["cost_usd"]) == 2.0
-
-
-class TestFallbackPricing:
-    """Unknown models should fall back to Sonnet pricing."""
-
-    def test_unknown_model_uses_sonnet_rates(self):
-        rows = _run_logger([_make_assistant_entry("some-future-model", input_tokens=1_000_000, output_tokens=0)])
-        # Sonnet input rate: $3/MTok
-        assert float(rows[0]["cost_usd"]) == 3.0
+    def test_offset_timezone(self):
+        assert period_key("2026-06-15T12:00:00+08:00", "daily") == "2026-06-15"
 
 
 # ---------------------------------------------------------------------------
-# No double-counting (the aggregate field must NOT add to the cost)
+# _cost_style
 # ---------------------------------------------------------------------------
 
-class TestNoDoubleCounting:
-    """Ensure cache_creation_input_tokens (aggregate) is not added on top of
-    the per-TTL breakdown.  See: github.com/anthropics/claude-code/issues/5904"""
+class TestCostStyle:
+    def test_high_cost(self):
+        assert _cost_style(50) == "bold red"
+        assert _cost_style(100) == "bold red"
 
-    def test_only_breakdown_is_billed(self):
-        """The aggregate field is 200K but the breakdown is 100K 5m + 100K 1h.
-        Cost should reflect only the breakdown, not the aggregate."""
-        entry = {
-            "type": "assistant",
-            "message": {
-                "model": "claude-opus-4-6",
-                "usage": {
-                    "input_tokens": 0,
-                    "output_tokens": 0,
-                    "cache_read_input_tokens": 0,
-                    "cache_creation_input_tokens": 200_000,  # aggregate — must be ignored
-                    "cache_creation": {
-                        "ephemeral_5m_input_tokens": 100_000,
-                        "ephemeral_1h_input_tokens": 100_000,
-                    },
-                },
-            },
-        }
-        rows = _run_logger([entry])
-        # 100K*$6.25 + 100K*$10.00 = $625000 + $1000000 = $1625000 / 1M = $1.625
-        assert float(rows[0]["cost_usd"]) == 1.625
+    def test_medium_cost(self):
+        assert _cost_style(10) == "yellow"
+        assert _cost_style(49.99) == "yellow"
 
-    def test_flat_cache_creation_falls_back_to_5m(self):
-        """If only aggregate cache_creation_input_tokens is present, bill as 5m."""
-        entry = {
-            "type": "assistant",
-            "message": {
-                "model": "claude-opus-4-6",
-                "usage": {
-                    "input_tokens": 0,
-                    "output_tokens": 0,
-                    "cache_read_input_tokens": 0,
-                    "cache_creation_input_tokens": 1_000_000,
-                },
-            },
-        }
-        rows = _run_logger([entry])
-        assert int(rows[0]["cache_create_5m_tokens"]) == 1_000_000
-        assert int(rows[0]["cache_create_1h_tokens"]) == 0
-        assert float(rows[0]["cost_usd"]) == 6.25
+    def test_low_cost(self):
+        assert _cost_style(0) == "green"
+        assert _cost_style(9.99) == "green"
 
 
 # ---------------------------------------------------------------------------
-# Deduplication (transcript logs multiple entries per API call)
+# _sess (pluralization)
 # ---------------------------------------------------------------------------
 
-def test_duplicate_entries_are_deduplicated():
-    """Multiple transcript entries with the same message ID should be counted once.
-    The last entry (with final output_tokens) wins."""
-    entries = [
-        # Streaming updates for a single API call — same msg_id, growing output
-        _make_assistant_entry("claude-opus-4-6", input_tokens=3, output_tokens=9,
-                              cache_read=20000, cache_1h=5000, msg_id="msg_AAA"),
-        _make_assistant_entry("claude-opus-4-6", input_tokens=3, output_tokens=9,
-                              cache_read=20000, cache_1h=5000, msg_id="msg_AAA"),
-        _make_assistant_entry("claude-opus-4-6", input_tokens=3, output_tokens=500,
-                              cache_read=20000, cache_1h=5000, msg_id="msg_AAA"),
-    ]
-    rows = _run_logger(entries)
-    assert len(rows) == 1
-    row = rows[0]
+class TestSess:
+    def test_singular(self):
+        assert _sess(1) == "1 session"
 
-    # Should count the LAST entry only, not sum all three
-    assert int(row["input_tokens"]) == 3
-    assert int(row["output_tokens"]) == 500
-    assert int(row["cache_read_tokens"]) == 20000
-    assert int(row["cache_create_1h_tokens"]) == 5000
-    assert int(row["turns"]) == 1
-
-    # (3*5 + 500*25 + 20000*0.50 + 5000*10) / 1M = (15 + 12500 + 10000 + 50000) / 1M
-    assert float(row["cost_usd"]) == 0.0725
-
-
-def test_different_message_ids_not_deduplicated():
-    """Entries with different message IDs are separate API calls."""
-    entries = [
-        _make_assistant_entry("claude-opus-4-6", input_tokens=100, output_tokens=200, msg_id="msg_A"),
-        _make_assistant_entry("claude-opus-4-6", input_tokens=100, output_tokens=200, msg_id="msg_B"),
-    ]
-    rows = _run_logger(entries)
-    assert len(rows) == 1
-    assert int(rows[0]["input_tokens"]) == 200
-    assert int(rows[0]["output_tokens"]) == 400
-    assert int(rows[0]["turns"]) == 2
+    def test_plural(self):
+        assert _sess(0) == "0 sessions"
+        assert _sess(2) == "2 sessions"
+        assert _sess(100) == "100 sessions"
 
 
 # ---------------------------------------------------------------------------
-# Accumulation, filtering, and CSV structure
+# _tok (token formatting)
 # ---------------------------------------------------------------------------
 
-def test_multiple_turns_accumulate():
-    """Token counts should sum across turns for the same model."""
-    entries = [
-        _make_assistant_entry("claude-opus-4-6", input_tokens=100, output_tokens=200),
-        _make_assistant_entry("claude-opus-4-6", input_tokens=300, output_tokens=400),
-    ]
-    rows = _run_logger(entries)
-    assert len(rows) == 1
-    assert int(rows[0]["input_tokens"]) == 400
-    assert int(rows[0]["output_tokens"]) == 600
-    assert int(rows[0]["turns"]) == 2
+class TestTok:
+    def test_small(self):
+        assert _tok(0) == "0"
+        assert _tok(999) == "999"
 
+    def test_thousands(self):
+        assert _tok(1_000) == "1.0k"
+        assert _tok(28_059) == "28.1k"
 
-def test_multiple_models_separate_rows_with_correct_costs():
-    """Different models produce separate rows, each priced correctly."""
-    entries = [
-        _make_assistant_entry("claude-opus-4-6", input_tokens=1000, output_tokens=500),
-        _make_assistant_entry("claude-haiku-4-5-20251001", input_tokens=500, output_tokens=1000),
-    ]
-    rows = _run_logger(entries)
-    assert len(rows) == 2
-
-    by_model = {r["model"]: r for r in rows}
-
-    # Opus: (1000*5 + 500*25) / 1M = 17500 / 1M = $0.0175
-    assert float(by_model["claude-opus-4-6"]["cost_usd"]) == 0.0175
-
-    # Haiku: (500*1 + 1000*5) / 1M = 5500 / 1M = $0.0055
-    assert float(by_model["claude-haiku-4-5-20251001"]["cost_usd"]) == 0.0055
-
-
-def test_non_assistant_entries_ignored():
-    """Non-assistant entries in transcript should be skipped."""
-    entries = [
-        {"type": "queue-operation", "operation": "enqueue"},
-        {"type": "human", "message": {"content": "hello"}},
-        _make_assistant_entry("claude-opus-4-6", input_tokens=100, output_tokens=200),
-        {"type": "tool_result", "content": "ok"},
-    ]
-    rows = _run_logger(entries)
-    assert len(rows) == 1
-    assert int(rows[0]["turns"]) == 1
-    assert int(rows[0]["input_tokens"]) == 100
-
-
-def test_empty_transcript():
-    """Empty transcript should produce no CSV."""
-    with tempfile.TemporaryDirectory() as tmp:
-        transcript_path = os.path.join(tmp, "transcript.jsonl")
-        Path(transcript_path).write_text("")
-
-        env = os.environ.copy()
-        env["HOME"] = tmp
-        os.makedirs(os.path.join(tmp, ".claude"))
-
-        result = subprocess.run(
-            ["python3", str(LOGGER_SCRIPT)],
-            input=json.dumps({
-                "session_id": "test",
-                "transcript_path": transcript_path,
-                "cwd": "/tmp",
-                "reason": "test",
-            }),
-            capture_output=True,
-            text=True,
-            env=env,
-        )
-        assert result.returncode == 0
-        assert not os.path.exists(os.path.join(tmp, ".claude", "session-costs.csv"))
-
-
-def test_project_derived_from_cwd():
-    """Project name should be the last component of cwd."""
-    entries = [
-        _make_assistant_entry("claude-opus-4-6", input_tokens=100, output_tokens=100),
-    ]
-    rows = _run_logger(entries, cwd="/Users/someone/projects/my-cool-app")
-    assert rows[0]["project"] == "my-cool-app"
+    def test_millions(self):
+        assert _tok(1_000_000) == "1.0M"
+        assert _tok(2_500_000) == "2.5M"
 
 
 # ---------------------------------------------------------------------------
-# Realistic multi-turn session
+# load_rows
 # ---------------------------------------------------------------------------
 
-def test_realistic_session():
-    """Simulate a realistic Opus session and verify against a hand-calculated cost."""
-    entries = [
-        _make_assistant_entry("claude-opus-4-6", input_tokens=3, output_tokens=14, cache_read=18914, cache_1h=1654),
-        _make_assistant_entry("claude-opus-4-6", input_tokens=3, output_tokens=271, cache_read=18914, cache_1h=1654),
-        _make_assistant_entry("claude-opus-4-6", input_tokens=3, output_tokens=5000, cache_read=25000, cache_1h=2000),
-    ]
-    rows = _run_logger(entries)
-    row = rows[0]
+class TestLoadRows:
+    def test_loads_csv(self):
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False) as f:
+            f.write("timestamp,session_id,project,model,cost_usd,input_tokens,output_tokens\n")
+            f.write("2026-03-01T17:00:33Z,abc123,myproj,claude-opus-4-6,4.15,1000,2000\n")
+            f.write("2026-03-01T18:00:00Z,def456,other,claude-opus-4-6,1.00,500,600\n")
+            path = f.name
+        try:
+            with patch("claude_costs.CSV_PATH", __import__("pathlib").Path(path)):
+                rows = load_rows()
+                assert len(rows) == 2
+                assert rows[0]["project"] == "myproj"
+                assert rows[0]["cost_usd"] == "4.15"
+        finally:
+            os.unlink(path)
 
-    assert int(row["input_tokens"]) == 9
-    assert int(row["output_tokens"]) == 5285
-    assert int(row["cache_read_tokens"]) == 62828
-    assert int(row["cache_create_1h_tokens"]) == 5308
-    assert int(row["turns"]) == 3
+    def test_project_filter(self):
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False) as f:
+            f.write("timestamp,session_id,project,model,cost_usd,input_tokens,output_tokens\n")
+            f.write("2026-03-01T17:00:33Z,abc,projA,opus,1.00,,\n")
+            f.write("2026-03-01T18:00:00Z,def,projB,opus,2.00,,\n")
+            f.write("2026-03-01T19:00:00Z,ghi,projA,opus,3.00,,\n")
+            path = f.name
+        try:
+            with patch("claude_costs.CSV_PATH", __import__("pathlib").Path(path)):
+                rows = load_rows(project_filter="projA")
+                assert len(rows) == 2
+                assert all(r["project"] == "projA" for r in rows)
+        finally:
+            os.unlink(path)
 
-    # Hand calculation:
-    #   9 * $5  +  5285 * $25  +  62828 * $0.50  +  5308 * $10  = per-MTok
-    #   45      +  132125      +  31414           +  53080       = 216664
-    #   216664 / 1_000_000 = $0.216664 → rounded to $0.2167
-    assert float(row["cost_usd"]) == 0.2167
+    def test_missing_file(self):
+        with patch("claude_costs.CSV_PATH", __import__("pathlib").Path("/nonexistent/path.csv")):
+            assert load_rows() == []
+
+    def test_empty_file(self):
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False) as f:
+            path = f.name
+        try:
+            with patch("claude_costs.CSV_PATH", __import__("pathlib").Path(path)):
+                assert load_rows() == []
+        finally:
+            os.unlink(path)
 
 
 # ---------------------------------------------------------------------------
-# CSV sanitization
+# aggregate
 # ---------------------------------------------------------------------------
 
-def test_formula_like_project_name_is_sanitized():
-    """Directory names starting with = + - @ should be prefixed with '."""
-    entries = [
-        _make_assistant_entry("claude-opus-4-6", input_tokens=100, output_tokens=100),
-    ]
-    rows = _run_logger(entries, cwd="/tmp/=malicious")
-    assert rows[0]["project"] == "'=malicious"
+class TestAggregate:
+    def _make_rows(self):
+        return [
+            {"timestamp": "2026-03-01T10:00:00Z", "project": "alpha", "cost_usd": "5.00", "input_tokens": "1000", "output_tokens": "2000"},
+            {"timestamp": "2026-03-01T12:00:00Z", "project": "alpha", "cost_usd": "3.00", "input_tokens": "500", "output_tokens": "800"},
+            {"timestamp": "2026-03-01T14:00:00Z", "project": "beta", "cost_usd": "2.00", "input_tokens": "200", "output_tokens": "300"},
+            {"timestamp": "2026-04-01T10:00:00Z", "project": "alpha", "cost_usd": "1.00", "input_tokens": "100", "output_tokens": "100"},
+        ]
+
+    def test_monthly_grouping(self):
+        data = aggregate(self._make_rows(), "monthly")
+        assert "2026-03" in data
+        assert "2026-04" in data
+        assert "alpha" in data["2026-03"]
+        assert "beta" in data["2026-03"]
+
+    def test_daily_grouping(self):
+        data = aggregate(self._make_rows(), "daily")
+        assert "2026-03-01" in data
+        assert "2026-04-01" in data
+
+    def test_cost_aggregation(self):
+        data = aggregate(self._make_rows(), "monthly")
+        alpha_mar = data["2026-03"]["alpha"]
+        assert alpha_mar["cost"] == 8.0
+        assert alpha_mar["sessions"] == 2
+        assert alpha_mar["in_tok"] == 1500
+        assert alpha_mar["out_tok"] == 2800
+
+    def test_rows_preserved(self):
+        rows = self._make_rows()
+        data = aggregate(rows, "monthly")
+        alpha_mar = data["2026-03"]["alpha"]
+        assert len(alpha_mar["rows"]) == 2
+        assert alpha_mar["rows"][0]["cost_usd"] == "5.00"
+        assert alpha_mar["rows"][1]["cost_usd"] == "3.00"
+
+    def test_empty_tokens_handled(self):
+        rows = [
+            {"timestamp": "2026-03-01T10:00:00Z", "project": "x", "cost_usd": "1.00", "input_tokens": "", "output_tokens": ""},
+        ]
+        data = aggregate(rows, "monthly")
+        assert data["2026-03"]["x"]["in_tok"] == 0
+        assert data["2026-03"]["x"]["out_tok"] == 0
+
+    def test_empty_input(self):
+        assert aggregate([], "monthly") == {}
+
+
+# ---------------------------------------------------------------------------
+# statusline _upsert_csv
+# ---------------------------------------------------------------------------
+
+class TestUpsertCsv:
+    def test_insert_new_session(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            csv_path = os.path.join(tmp, "session-costs.csv")
+            # Import and patch CSV_PATH in statusline module
+            import importlib.util
+            spec = importlib.util.spec_from_file_location(
+                "statusline", os.path.join(os.path.dirname(__file__), "..", "config", "statusline-command.py")
+            )
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+
+            from pathlib import Path
+            original = mod.CSV_PATH
+            mod.CSV_PATH = Path(csv_path)
+            try:
+                mod._upsert_csv("sess1", "myproj", "opus", 4.15, "2026-03-01T10:00:00Z", 1000, 2000)
+                with open(csv_path) as f:
+                    rows = list(csv.DictReader(f))
+                assert len(rows) == 1
+                assert rows[0]["session_id"] == "sess1"
+                assert rows[0]["project"] == "myproj"
+                assert rows[0]["cost_usd"] == "4.1500"
+                assert rows[0]["input_tokens"] == "1000"
+                assert rows[0]["output_tokens"] == "2000"
+            finally:
+                mod.CSV_PATH = original
+
+    def test_update_existing_session(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            csv_path = os.path.join(tmp, "session-costs.csv")
+            import importlib.util
+            spec = importlib.util.spec_from_file_location(
+                "statusline", os.path.join(os.path.dirname(__file__), "..", "config", "statusline-command.py")
+            )
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+
+            from pathlib import Path
+            original = mod.CSV_PATH
+            mod.CSV_PATH = Path(csv_path)
+            try:
+                mod._upsert_csv("sess1", "proj", "opus", 1.00, "2026-03-01T10:00:00Z", 100, 200)
+                mod._upsert_csv("sess1", "proj", "opus", 5.00, "2026-03-01T11:00:00Z", 500, 800)
+                with open(csv_path) as f:
+                    rows = list(csv.DictReader(f))
+                assert len(rows) == 1
+                assert rows[0]["cost_usd"] == "5.0000"
+                assert rows[0]["input_tokens"] == "500"
+                assert rows[0]["output_tokens"] == "800"
+            finally:
+                mod.CSV_PATH = original
+
+    def test_multiple_sessions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            csv_path = os.path.join(tmp, "session-costs.csv")
+            import importlib.util
+            spec = importlib.util.spec_from_file_location(
+                "statusline", os.path.join(os.path.dirname(__file__), "..", "config", "statusline-command.py")
+            )
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+
+            from pathlib import Path
+            original = mod.CSV_PATH
+            mod.CSV_PATH = Path(csv_path)
+            try:
+                mod._upsert_csv("sess1", "projA", "opus", 1.00, "2026-03-01T10:00:00Z", 100, 200)
+                mod._upsert_csv("sess2", "projB", "opus", 2.00, "2026-03-01T11:00:00Z", 300, 400)
+                with open(csv_path) as f:
+                    rows = list(csv.DictReader(f))
+                assert len(rows) == 2
+                assert rows[0]["session_id"] == "sess1"
+                assert rows[1]["session_id"] == "sess2"
+            finally:
+                mod.CSV_PATH = original
