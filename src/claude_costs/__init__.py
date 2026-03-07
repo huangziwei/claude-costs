@@ -4,9 +4,6 @@ __version__ = "0.2.0"
 
 import argparse
 import csv
-import io
-import subprocess
-import sys
 from collections import defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -28,31 +25,6 @@ def load_rows(project_filter: str | None = None) -> list[dict]:
         rows = [r for r in rows if r.get("project") == project_filter]
     return rows
 
-
-def load_remote_rows(
-    host: str, project_filter: str | None = None
-) -> list[dict]:
-    remote_path = "~/.claude/session-costs.csv"
-    try:
-        result = subprocess.run(
-            ["ssh", host, "cat", remote_path],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-    except (subprocess.TimeoutExpired, FileNotFoundError) as e:
-        print(f"Warning: failed to read from {host}: {e}", file=sys.stderr)
-        return []
-    if result.returncode != 0:
-        print(
-            f"Warning: ssh {host} failed: {result.stderr.strip()}",
-            file=sys.stderr,
-        )
-        return []
-    rows = list(csv.DictReader(io.StringIO(result.stdout)))
-    if project_filter:
-        rows = [r for r in rows if r.get("project") == project_filter]
-    return rows
 
 
 def period_key(timestamp: str, granularity: str) -> str:
@@ -143,14 +115,12 @@ class CostsApp(App):
         rows: list[dict],
         initial_granularity: str = "monthly",
         project_filter: str | None = None,
-        remote_hosts: list[str] | None = None,
     ):
         super().__init__()
         self.rows = rows
         self.granularity = initial_granularity
         self.show_tokens = False
         self._project_filter = project_filter
-        self._remote_hosts = remote_hosts or []
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -173,10 +143,6 @@ class CostsApp(App):
 
     def action_reload(self) -> None:
         self.rows = load_rows(project_filter=self._project_filter)
-        for host in self._remote_hosts:
-            self.rows.extend(
-                load_remote_rows(host, project_filter=self._project_filter)
-            )
         self._rebuild()
 
     def _rebuild(self) -> None:
@@ -337,20 +303,13 @@ def main() -> None:
         "--project", type=str, default=None,
         help="Filter to a specific project name.",
     )
-    parser.add_argument(
-        "--remote", type=str, action="append", default=[], metavar="HOST",
-        help="SSH host to read remote costs from (can be repeated).",
-    )
     args = parser.parse_args()
 
     rows = load_rows(project_filter=args.project)
-    for host in args.remote:
-        rows.extend(load_remote_rows(host, project_filter=args.project))
 
     app = CostsApp(
         rows,
         initial_granularity=args.granularity,
         project_filter=args.project,
-        remote_hosts=args.remote,
     )
     app.run()
