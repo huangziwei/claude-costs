@@ -58,9 +58,9 @@ def period_key(timestamp: str, granularity: str) -> str:
     if granularity == "daily":
         return dt.strftime("%Y-%m-%d")
     if granularity == "weekly":
-        # Weeks start on Sunday: shift forward 1 day so Sunday maps to Monday
-        shifted = dt + timedelta(days=1)
-        iso = shifted.isocalendar()
+        # Weeks start on Sunday: find the Sunday that starts this week
+        sunday = dt - timedelta(days=(dt.weekday() + 1) % 7)
+        iso = sunday.isocalendar()
         return f"{iso.year}-W{iso.week:02d}"
     return dt.strftime("%Y-%m")
 
