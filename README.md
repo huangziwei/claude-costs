@@ -1,11 +1,19 @@
 # claude-costs
 
-Interactive TUI for tracking Claude Code session costs and token usage.
+Custom Claude Code status line and an interactive TUI for tracking session costs and token usage.
 
 ## Install
 
+### Everything
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/huangziwei/claude-costs/main/install.sh | bash
+```
+
+### claude-costs only
+
+```bash
+uv tool install git+https://github.com/huangziwei/claude-costs.git
 ```
 
 Or clone and run locally:
