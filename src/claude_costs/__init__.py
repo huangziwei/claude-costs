@@ -11,6 +11,7 @@ from pathlib import Path
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
+from textual.containers import Horizontal
 from textual.widgets import Footer, Header, Static, Tree
 
 CSV_PATH = Path.home() / ".claude" / "session-costs.csv"
@@ -90,6 +91,12 @@ class CostsApp(App):
         height: 1;
         padding: 0 2;
         background: $primary-background;
+        layout: horizontal;
+    }
+    .tab {
+        width: auto;
+        min-width: 0;
+        margin: 0 1 0 0;
     }
     #total-bar {
         dock: bottom;
@@ -124,7 +131,10 @@ class CostsApp(App):
 
     def compose(self) -> ComposeResult:
         yield Header()
-        yield Static(id="granularity-bar")
+        with Horizontal(id="granularity-bar"):
+            yield Static("Monthly", id="tab-monthly", classes="tab")
+            yield Static("Weekly", id="tab-weekly", classes="tab")
+            yield Static("Daily", id="tab-daily", classes="tab")
         yield Tree("", id="cost-tree")
         yield Static(id="total-bar")
         yield Footer()
@@ -145,18 +155,23 @@ class CostsApp(App):
         self.rows = load_rows(project_filter=self._project_filter)
         self._rebuild()
 
+    def on_click(self, event) -> None:
+        widget = event.widget
+        if isinstance(widget, Static) and widget.id and widget.id.startswith("tab-"):
+            granularity = widget.id.removeprefix("tab-")
+            self.action_set_granularity(granularity)
+
     def _rebuild(self) -> None:
         g = self.granularity
 
         # Granularity indicator
-        labels = {"monthly": "Monthly", "weekly": "Weekly", "daily": "Daily"}
-        parts = []
-        for key, label in labels.items():
+        tabs = {"monthly": "Monthly", "weekly": "Weekly", "daily": "Daily"}
+        for key, label in tabs.items():
+            widget = self.query_one(f"#tab-{key}", Static)
             if key == g:
-                parts.append(f"[bold reverse] {label} [/]")
+                widget.update(f"[bold reverse] {label} [/]")
             else:
-                parts.append(f"[dim] {label} [/]")
-        self.query_one("#granularity-bar", Static).update("  ".join(parts))
+                widget.update(f"[dim] {label} [/]")
 
         # Aggregate
         data = aggregate(self.rows, g)
