@@ -27,7 +27,6 @@ def load_rows(project_filter: str | None = None) -> list[dict]:
     return rows
 
 
-
 def period_key(timestamp: str, granularity: str) -> str:
     try:
         dt = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
@@ -44,7 +43,16 @@ def period_key(timestamp: str, granularity: str) -> str:
 
 def aggregate(rows: list[dict], granularity: str) -> dict:
     data: dict[str, dict[str, dict]] = defaultdict(
-        lambda: defaultdict(lambda: {"cost": 0.0, "sessions": 0, "in_tok": 0, "out_tok": 0, "duration_ms": 0, "rows": []})
+        lambda: defaultdict(
+            lambda: {
+                "cost": 0.0,
+                "sessions": 0,
+                "in_tok": 0,
+                "out_tok": 0,
+                "duration_ms": 0,
+                "rows": [],
+            }
+        )
     )
     for row in rows:
         period = period_key(row.get("timestamp", ""), granularity)
@@ -196,9 +204,7 @@ class CostsApp(App):
         tree.show_root = False
 
         if not data:
-            tree.root.add_leaf(
-                Text("No session data found.", style="dim")
-            )
+            tree.root.add_leaf(Text("No session data found.", style="dim"))
             self.query_one("#total-bar", Static).update("")
             return
 
@@ -212,10 +218,13 @@ class CostsApp(App):
                 return p["in_tok"] + p["out_tok"]
             return p["cost"]
 
-        max_val = max(
-            (_val(p) for projects in data.values() for p in projects.values()),
-            default=1,
-        ) or 1
+        max_val = (
+            max(
+                (_val(p) for projects in data.values() for p in projects.values()),
+                default=1,
+            )
+            or 1
+        )
 
         all_projects = {p for projects in data.values() for p in projects}
         pad = max(len(p) for p in all_projects) if all_projects else 12
@@ -242,25 +251,27 @@ class CostsApp(App):
             label = Text()
             label.append(f"{period}", style="bold")
             if show_tok:
-                label.append(f"  {_tok(total_in)} in / {_tok(total_out)} out", style="blue")
+                label.append(
+                    f"  {_tok(total_in)} in / {_tok(total_out)} out", style="blue"
+                )
             else:
                 label.append(f"  ${total:>8.2f}", style=_cost_style(total))
             label.append(f"  ({_sess(total_sessions)})", style="dim")
             if total_dur:
-                label.append(f"  {_duration(total_dur)} api", style="italic")
+                label.append(f"  {_duration(total_dur)}", style="italic")
 
             node = tree.root.add(label, expand=True)
 
-            for proj_name in sorted(
-                projects, key=lambda p: -_val(projects[p])
-            ):
+            for proj_name in sorted(projects, key=lambda p: -_val(projects[p])):
                 p = projects[proj_name]
                 bar_len = int(20 * _val(p) / max_val)
                 bar = "\u2588" * bar_len
 
                 sess_str = f"({_sess(p['sessions'])})"
                 if show_tok:
-                    val_str = f"  {_tok(p['in_tok']):>6} in / {_tok(p['out_tok']):>6} out"
+                    val_str = (
+                        f"  {_tok(p['in_tok']):>6} in / {_tok(p['out_tok']):>6} out"
+                    )
                 else:
                     val_str = f"  ${p['cost']:>8.2f}"
                 text_len = pad + len(val_str) + 2 + len(sess_str)
@@ -300,7 +311,9 @@ class CostsApp(App):
                     s_in = int(srow.get("input_tokens", 0) or 0)
                     s_out = int(srow.get("output_tokens", 0) or 0)
                     if s_in or s_out:
-                        slabel.append(f"  {_tok(s_in)} in / {_tok(s_out)} out", style="blue")
+                        slabel.append(
+                            f"  {_tok(s_in)} in / {_tok(s_out)} out", style="blue"
+                        )
                     s_dur = int(srow.get("duration_api_ms", 0) or 0)
                     if s_dur:
                         slabel.append(f"  {_duration(s_dur)}", style="italic")
@@ -312,7 +325,9 @@ class CostsApp(App):
         total_text = Text()
         total_text.append("Total: ", style="bold")
         if show_tok:
-            total_text.append(f"{_tok(grand_in)} in / {_tok(grand_out)} out", style="bold blue")
+            total_text.append(
+                f"{_tok(grand_in)} in / {_tok(grand_out)} out", style="bold blue"
+            )
         else:
             total_text.append(f"${grand_total:.2f}", style="bold green")
         total_text.append(f"  ({_sess(grand_sessions)})", style="dim")
@@ -322,28 +337,43 @@ class CostsApp(App):
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Summarize Claude Code session costs."
-    )
+    parser = argparse.ArgumentParser(description="Summarize Claude Code session costs.")
     parser.add_argument(
-        "-v", "--version", action="version", version=f"%(prog)s {__version__}",
+        "-v",
+        "--version",
+        action="version",
+        version=f"%(prog)s {__version__}",
     )
     group = parser.add_mutually_exclusive_group()
     group.add_argument(
-        "-d", "--daily", action="store_const", const="daily",
-        dest="granularity", help="Start with daily view.",
+        "-d",
+        "--daily",
+        action="store_const",
+        const="daily",
+        dest="granularity",
+        help="Start with daily view.",
     )
     group.add_argument(
-        "-w", "--weekly", action="store_const", const="weekly",
-        dest="granularity", help="Start with weekly view.",
+        "-w",
+        "--weekly",
+        action="store_const",
+        const="weekly",
+        dest="granularity",
+        help="Start with weekly view.",
     )
     group.add_argument(
-        "-m", "--monthly", action="store_const", const="monthly",
-        dest="granularity", help="Start with monthly view (default).",
+        "-m",
+        "--monthly",
+        action="store_const",
+        const="monthly",
+        dest="granularity",
+        help="Start with monthly view (default).",
     )
     parser.set_defaults(granularity="monthly")
     parser.add_argument(
-        "--project", type=str, default=None,
+        "--project",
+        type=str,
+        default=None,
         help="Filter to a specific project name.",
     )
     args = parser.parse_args()
