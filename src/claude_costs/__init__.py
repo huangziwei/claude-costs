@@ -1,6 +1,8 @@
 """Interactive TUI for Claude Code session costs."""
 
-__version__ = "0.2.0"
+from importlib.metadata import version as _pkg_version
+
+__version__ = _pkg_version("claude-costs")
 
 import argparse
 import csv
@@ -229,6 +231,16 @@ class CostsApp(App):
         all_projects = {p for projects in data.values() for p in projects}
         pad = max(len(p) for p in all_projects) if all_projects else 12
 
+        # Compute global max widths for sessions and duration columns
+        max_sess_width = 0
+        max_dur_width = 0
+        for projects in data.values():
+            for p in projects.values():
+                sess_str = f"({_sess(p['sessions'])})"
+                dur_str = _duration(p["duration_ms"]) if p["duration_ms"] else ""
+                max_sess_width = max(max_sess_width, len(sess_str))
+                max_dur_width = max(max_dur_width, len(dur_str))
+
         grand_total = 0.0
         grand_sessions = 0
         grand_in = 0
@@ -264,30 +276,40 @@ class CostsApp(App):
 
             for proj_name in sorted(projects, key=lambda p: -_val(projects[p])):
                 p = projects[proj_name]
+                sess_str = f"({_sess(p['sessions'])})"
+                dur_str = _duration(p["duration_ms"]) if p["duration_ms"] else ""
                 bar_len = int(20 * _val(p) / max_val)
                 bar = "\u2588" * bar_len
 
-                sess_str = f"({_sess(p['sessions'])})"
                 if show_tok:
                     val_str = (
                         f"  {_tok(p['in_tok']):>6} in / {_tok(p['out_tok']):>6} out"
                     )
                 else:
                     val_str = f"  ${p['cost']:>8.2f}"
-                text_len = pad + len(val_str) + 2 + len(sess_str)
-                bar_col = pad + 40
-                gap = max(2, bar_col - text_len)
 
-                plabel = Text()
-                plabel.append(f"{proj_name:<{pad}}", style="cyan")
-                if show_tok:
-                    plabel.append(val_str, style="blue")
-                else:
-                    plabel.append(val_str, style=_cost_style(p["cost"]))
-                plabel.append(f"  {sess_str}", style="dim")
-                if p["duration_ms"]:
-                    plabel.append(f"  {_duration(p['duration_ms'])}", style="italic")
-                plabel.append(" " * gap)
+                # Build entire prefix as one plain string to guarantee
+                # fixed width, then apply styles by character position.
+                prefix = f"{proj_name:<{pad}}"
+                prefix += val_str
+                prefix += f"  {sess_str:>{max_sess_width}}"
+                if max_dur_width:
+                    prefix += f"  {dur_str:>{max_dur_width}}"
+                prefix += "  "
+
+                plabel = Text(prefix)
+                # Apply styles by character ranges
+                c = 0
+                plabel.stylize("cyan", c, c + pad)
+                c += pad
+                val_style = "blue" if show_tok else _cost_style(p["cost"])
+                plabel.stylize(val_style, c, c + len(val_str))
+                c += len(val_str)
+                plabel.stylize("dim", c, c + 2 + max_sess_width)
+                c += 2 + max_sess_width
+                if max_dur_width and dur_str:
+                    plabel.stylize("italic", c, c + 2 + max_dur_width)
+
                 if bar:
                     plabel.append(bar, style="magenta")
 

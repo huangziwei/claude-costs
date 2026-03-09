@@ -37,7 +37,7 @@ rm -f "$CLAUDE_DIR/claude-costs.py"
 # --- Install claude-costs TUI via uv tool ---------------------------------
 if command -v uv &>/dev/null; then
   printf "Installing claude-costs tool...\n"
-  uv tool install --force "$REPO_DIR"
+  uv tool install --force --reinstall "$REPO_DIR"
 fi
 
 # --- Merge into settings.json (non-destructive) ---------------------------
