@@ -5,7 +5,7 @@ import os
 import tempfile
 from unittest.mock import patch
 
-from claude_costs import aggregate, load_rows, period_key, _cost_style, _sess, _tok
+from claude_costs import aggregate, load_rows, period_key, _cost_style, _sess, _tok, _duration
 
 
 # ---------------------------------------------------------------------------
@@ -84,15 +84,36 @@ class TestTok:
 
 
 # ---------------------------------------------------------------------------
+# _duration (time formatting)
+# ---------------------------------------------------------------------------
+
+class TestDuration:
+    def test_seconds(self):
+        assert _duration(0) == "0s"
+        assert _duration(5000) == "5s"
+        assert _duration(59000) == "59s"
+
+    def test_minutes(self):
+        assert _duration(60000) == "1m00s"
+        assert _duration(90000) == "1m30s"
+        assert _duration(3599000) == "59m59s"
+
+    def test_hours(self):
+        assert _duration(3600000) == "1h00m"
+        assert _duration(5400000) == "1h30m"
+        assert _duration(7200000) == "2h00m"
+
+
+# ---------------------------------------------------------------------------
 # load_rows
 # ---------------------------------------------------------------------------
 
 class TestLoadRows:
     def test_loads_csv(self):
         with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False) as f:
-            f.write("timestamp,session_id,project,model,cost_usd,input_tokens,output_tokens\n")
-            f.write("2026-03-01T17:00:33Z,abc123,myproj,claude-opus-4-6,4.15,1000,2000\n")
-            f.write("2026-03-01T18:00:00Z,def456,other,claude-opus-4-6,1.00,500,600\n")
+            f.write("timestamp,session_id,project,model,cost_usd,input_tokens,output_tokens,duration_api_ms\n")
+            f.write("2026-03-01T17:00:33Z,abc123,myproj,claude-opus-4-6,4.15,1000,2000,60000\n")
+            f.write("2026-03-01T18:00:00Z,def456,other,claude-opus-4-6,1.00,500,600,30000\n")
             path = f.name
         try:
             with patch("claude_costs.CSV_PATH", __import__("pathlib").Path(path)):
@@ -105,10 +126,10 @@ class TestLoadRows:
 
     def test_project_filter(self):
         with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False) as f:
-            f.write("timestamp,session_id,project,model,cost_usd,input_tokens,output_tokens\n")
-            f.write("2026-03-01T17:00:33Z,abc,projA,opus,1.00,,\n")
-            f.write("2026-03-01T18:00:00Z,def,projB,opus,2.00,,\n")
-            f.write("2026-03-01T19:00:00Z,ghi,projA,opus,3.00,,\n")
+            f.write("timestamp,session_id,project,model,cost_usd,input_tokens,output_tokens,duration_api_ms\n")
+            f.write("2026-03-01T17:00:33Z,abc,projA,opus,1.00,,,\n")
+            f.write("2026-03-01T18:00:00Z,def,projB,opus,2.00,,,\n")
+            f.write("2026-03-01T19:00:00Z,ghi,projA,opus,3.00,,,\n")
             path = f.name
         try:
             with patch("claude_costs.CSV_PATH", __import__("pathlib").Path(path)):
@@ -139,10 +160,10 @@ class TestLoadRows:
 class TestAggregate:
     def _make_rows(self):
         return [
-            {"timestamp": "2026-03-01T10:00:00Z", "project": "alpha", "cost_usd": "5.00", "input_tokens": "1000", "output_tokens": "2000"},
-            {"timestamp": "2026-03-01T12:00:00Z", "project": "alpha", "cost_usd": "3.00", "input_tokens": "500", "output_tokens": "800"},
-            {"timestamp": "2026-03-01T14:00:00Z", "project": "beta", "cost_usd": "2.00", "input_tokens": "200", "output_tokens": "300"},
-            {"timestamp": "2026-04-01T10:00:00Z", "project": "alpha", "cost_usd": "1.00", "input_tokens": "100", "output_tokens": "100"},
+            {"timestamp": "2026-03-01T10:00:00Z", "project": "alpha", "cost_usd": "5.00", "input_tokens": "1000", "output_tokens": "2000", "duration_api_ms": "60000"},
+            {"timestamp": "2026-03-01T12:00:00Z", "project": "alpha", "cost_usd": "3.00", "input_tokens": "500", "output_tokens": "800", "duration_api_ms": "45000"},
+            {"timestamp": "2026-03-01T14:00:00Z", "project": "beta", "cost_usd": "2.00", "input_tokens": "200", "output_tokens": "300", "duration_api_ms": "30000"},
+            {"timestamp": "2026-04-01T10:00:00Z", "project": "alpha", "cost_usd": "1.00", "input_tokens": "100", "output_tokens": "100", "duration_api_ms": "15000"},
         ]
 
     def test_monthly_grouping(self):
@@ -164,6 +185,7 @@ class TestAggregate:
         assert alpha_mar["sessions"] == 2
         assert alpha_mar["in_tok"] == 1500
         assert alpha_mar["out_tok"] == 2800
+        assert alpha_mar["duration_ms"] == 105000
 
     def test_rows_preserved(self):
         rows = self._make_rows()
@@ -205,7 +227,7 @@ class TestUpsertCsv:
             original = mod.CSV_PATH
             mod.CSV_PATH = Path(csv_path)
             try:
-                mod._upsert_csv("sess1", "myproj", "opus", 4.15, "2026-03-01T10:00:00Z", 1000, 2000)
+                mod._upsert_csv("sess1", "myproj", "opus", 4.15, "2026-03-01T10:00:00Z", 1000, 2000, 60000)
                 with open(csv_path) as f:
                     rows = list(csv.DictReader(f))
                 assert len(rows) == 1
@@ -214,6 +236,7 @@ class TestUpsertCsv:
                 assert rows[0]["cost_usd"] == "4.1500"
                 assert rows[0]["input_tokens"] == "1000"
                 assert rows[0]["output_tokens"] == "2000"
+                assert rows[0]["duration_api_ms"] == "60000"
             finally:
                 mod.CSV_PATH = original
 
@@ -231,14 +254,15 @@ class TestUpsertCsv:
             original = mod.CSV_PATH
             mod.CSV_PATH = Path(csv_path)
             try:
-                mod._upsert_csv("sess1", "proj", "opus", 1.00, "2026-03-01T10:00:00Z", 100, 200)
-                mod._upsert_csv("sess1", "proj", "opus", 5.00, "2026-03-01T11:00:00Z", 500, 800)
+                mod._upsert_csv("sess1", "proj", "opus", 1.00, "2026-03-01T10:00:00Z", 100, 200, 10000)
+                mod._upsert_csv("sess1", "proj", "opus", 5.00, "2026-03-01T11:00:00Z", 500, 800, 50000)
                 with open(csv_path) as f:
                     rows = list(csv.DictReader(f))
                 assert len(rows) == 1
                 assert rows[0]["cost_usd"] == "5.0000"
                 assert rows[0]["input_tokens"] == "500"
                 assert rows[0]["output_tokens"] == "800"
+                assert rows[0]["duration_api_ms"] == "50000"
             finally:
                 mod.CSV_PATH = original
 
@@ -256,8 +280,8 @@ class TestUpsertCsv:
             original = mod.CSV_PATH
             mod.CSV_PATH = Path(csv_path)
             try:
-                mod._upsert_csv("sess1", "projA", "opus", 1.00, "2026-03-01T10:00:00Z", 100, 200)
-                mod._upsert_csv("sess2", "projB", "opus", 2.00, "2026-03-01T11:00:00Z", 300, 400)
+                mod._upsert_csv("sess1", "projA", "opus", 1.00, "2026-03-01T10:00:00Z", 100, 200, 10000)
+                mod._upsert_csv("sess2", "projB", "opus", 2.00, "2026-03-01T11:00:00Z", 300, 400, 20000)
                 with open(csv_path) as f:
                     rows = list(csv.DictReader(f))
                 assert len(rows) == 2

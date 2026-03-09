@@ -22,6 +22,7 @@ CSV_FIELDS = [
     "cost_usd",
     "input_tokens",
     "output_tokens",
+    "duration_api_ms",
 ]
 
 
@@ -47,7 +48,8 @@ def _git_branch(cwd: str) -> str:
 
 def _upsert_csv(session_id: str, project: str, model: str,
                 cost_usd: float, timestamp: str,
-                input_tokens: int, output_tokens: int) -> None:
+                input_tokens: int, output_tokens: int,
+                duration_api_ms: int = 0) -> None:
     """Update or insert the session's row in the CSV."""
     rows: list[dict] = []
     if CSV_PATH.exists() and CSV_PATH.stat().st_size > 0:
@@ -63,6 +65,7 @@ def _upsert_csv(session_id: str, project: str, model: str,
             row["model"] = model
             row["input_tokens"] = str(input_tokens)
             row["output_tokens"] = str(output_tokens)
+            row["duration_api_ms"] = str(duration_api_ms)
             found = True
             break
 
@@ -75,6 +78,7 @@ def _upsert_csv(session_id: str, project: str, model: str,
             "cost_usd": f"{cost_usd:.4f}",
             "input_tokens": str(input_tokens),
             "output_tokens": str(output_tokens),
+            "duration_api_ms": str(duration_api_ms),
         })
 
     # Atomic write via temp file + rename.
@@ -106,6 +110,7 @@ def main() -> None:
     input_tokens = ctx.get("total_input_tokens", 0)
     output_tokens = ctx.get("total_output_tokens", 0)
     cost_usd = data.get("cost", {}).get("total_cost_usd", 0)
+    duration_api_ms = data.get("cost", {}).get("total_api_duration_ms", 0)
     cwd = data.get("cwd", "")
     session_id = data.get("session_id", "unknown")
 
@@ -133,7 +138,7 @@ def main() -> None:
         from datetime import datetime, timezone
         now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         _upsert_csv(session_id, project, model_id, cost_usd, now,
-                    input_tokens, output_tokens)
+                    input_tokens, output_tokens, duration_api_ms)
     except Exception:
         pass
 

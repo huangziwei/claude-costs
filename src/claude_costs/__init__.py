@@ -44,7 +44,7 @@ def period_key(timestamp: str, granularity: str) -> str:
 
 def aggregate(rows: list[dict], granularity: str) -> dict:
     data: dict[str, dict[str, dict]] = defaultdict(
-        lambda: defaultdict(lambda: {"cost": 0.0, "sessions": 0, "in_tok": 0, "out_tok": 0, "rows": []})
+        lambda: defaultdict(lambda: {"cost": 0.0, "sessions": 0, "in_tok": 0, "out_tok": 0, "duration_ms": 0, "rows": []})
     )
     for row in rows:
         period = period_key(row.get("timestamp", ""), granularity)
@@ -52,10 +52,12 @@ def aggregate(rows: list[dict], granularity: str) -> dict:
         cost = float(row.get("cost_usd", 0))
         in_tok = int(row.get("input_tokens", 0) or 0)
         out_tok = int(row.get("output_tokens", 0) or 0)
+        dur_ms = int(row.get("duration_api_ms", 0) or 0)
         data[period][project]["cost"] += cost
         data[period][project]["sessions"] += 1
         data[period][project]["in_tok"] += in_tok
         data[period][project]["out_tok"] += out_tok
+        data[period][project]["duration_ms"] += dur_ms
         data[period][project]["rows"].append(row)
     return data
 
@@ -78,6 +80,20 @@ def _tok(n: int) -> str:
     if n >= 1_000:
         return f"{n / 1_000:.1f}k"
     return str(n)
+
+
+def _duration(ms: int) -> str:
+    """Format milliseconds as a human-readable duration."""
+    seconds = ms // 1000
+    if seconds < 60:
+        return f"{seconds}s"
+    minutes = seconds // 60
+    secs = seconds % 60
+    if minutes < 60:
+        return f"{minutes}m{secs:02d}s"
+    hours = minutes // 60
+    mins = minutes % 60
+    return f"{hours}h{mins:02d}m"
 
 
 class CostsApp(App):
@@ -208,6 +224,7 @@ class CostsApp(App):
         grand_sessions = 0
         grand_in = 0
         grand_out = 0
+        grand_dur = 0
 
         for period in periods:
             projects = data[period]
@@ -215,10 +232,12 @@ class CostsApp(App):
             total_sessions = sum(p["sessions"] for p in projects.values())
             total_in = sum(p["in_tok"] for p in projects.values())
             total_out = sum(p["out_tok"] for p in projects.values())
+            total_dur = sum(p["duration_ms"] for p in projects.values())
             grand_total += total
             grand_sessions += total_sessions
             grand_in += total_in
             grand_out += total_out
+            grand_dur += total_dur
 
             label = Text()
             label.append(f"{period}", style="bold")
@@ -227,6 +246,8 @@ class CostsApp(App):
             else:
                 label.append(f"  ${total:>8.2f}", style=_cost_style(total))
             label.append(f"  ({_sess(total_sessions)})", style="dim")
+            if total_dur:
+                label.append(f"  {_duration(total_dur)} api", style="italic")
 
             node = tree.root.add(label, expand=True)
 
@@ -253,6 +274,8 @@ class CostsApp(App):
                 else:
                     plabel.append(val_str, style=_cost_style(p["cost"]))
                 plabel.append(f"  {sess_str}", style="dim")
+                if p["duration_ms"]:
+                    plabel.append(f"  {_duration(p['duration_ms'])}", style="italic")
                 plabel.append(" " * gap)
                 if bar:
                     plabel.append(bar, style="magenta")
@@ -278,6 +301,9 @@ class CostsApp(App):
                     s_out = int(srow.get("output_tokens", 0) or 0)
                     if s_in or s_out:
                         slabel.append(f"  {_tok(s_in)} in / {_tok(s_out)} out", style="blue")
+                    s_dur = int(srow.get("duration_api_ms", 0) or 0)
+                    if s_dur:
+                        slabel.append(f"  {_duration(s_dur)}", style="italic")
                     model = srow.get("model", "")
                     if model:
                         slabel.append(f"  [{model}]", style="dim italic")
@@ -290,6 +316,8 @@ class CostsApp(App):
         else:
             total_text.append(f"${grand_total:.2f}", style="bold green")
         total_text.append(f"  ({_sess(grand_sessions)})", style="dim")
+        if grand_dur:
+            total_text.append(f"  {_duration(grand_dur)} api", style="bold italic")
         self.query_one("#total-bar", Static).update(total_text)
 
 
