@@ -356,7 +356,7 @@ class CostsApp(App):
             label.append(f"{period}", style="bold")
             if show_tok:
                 label.append(
-                    f"  {_tok(total_in)} in / {_tok(total_out)} out", style="blue"
+                    f"  {_tok(total_in):>6} in / {_tok(total_out):>6} out", style="blue"
                 )
             else:
                 label.append(f"  ${total:>8.2f}", style=_cost_style(total))
@@ -428,7 +428,7 @@ class CostsApp(App):
                     s_out = int(srow.get("output_tokens", 0) or 0)
                     if s_in or s_out:
                         slabel.append(
-                            f"  {_tok(s_in)} in / {_tok(s_out)} out", style="blue"
+                            f"  {_tok(s_in):>6} in / {_tok(s_out):>6} out", style="blue"
                         )
                     s_dur = int(srow.get("duration_api_ms", 0) or 0)
                     if s_dur:
