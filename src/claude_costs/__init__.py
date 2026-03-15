@@ -215,6 +215,7 @@ class CostsApp(App):
         Binding("w", "set_granularity('weekly')", "Weekly"),
         Binding("d", "set_granularity('daily')", "Daily"),
         Binding("t", "toggle_tokens", "Tokens"),
+        Binding("e", "toggle_expand", "Expand/Collapse"),
         Binding("r", "reload", "Reload"),
         Binding("q", "quit", "Quit"),
     ]
@@ -230,6 +231,7 @@ class CostsApp(App):
         self.granularity = initial_granularity
         self.show_tokens = False
         self._project_filter = project_filter
+        self._expand_level = 1  # 0=all collapsed, 1=periods, 2=all expanded
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -252,6 +254,19 @@ class CostsApp(App):
     def action_toggle_tokens(self) -> None:
         self.show_tokens = not self.show_tokens
         self._rebuild()
+
+    def action_toggle_expand(self) -> None:
+        self._expand_level = (self._expand_level + 1) % 3
+        self._apply_expand_level()
+
+    def _apply_expand_level(self) -> None:
+        tree: Tree = self.query_one("#cost-tree", Tree)
+        period_nodes = [n for n in tree.root.children if n.children]
+        project_nodes = [c for n in period_nodes for c in n.children if c.children]
+        for n in period_nodes:
+            n.expand() if self._expand_level >= 1 else n.collapse()
+        for n in project_nodes:
+            n.expand() if self._expand_level >= 2 else n.collapse()
 
     def action_reload(self) -> None:
         self.rows = load_rows(project_filter=self._project_filter)
@@ -278,6 +293,7 @@ class CostsApp(App):
         # Aggregate
         data = aggregate(self.rows, g)
         tree: Tree = self.query_one("#cost-tree", Tree)
+
         tree.clear()
         tree.show_root = False
 
@@ -348,7 +364,7 @@ class CostsApp(App):
             if total_dur:
                 label.append(f"  {_duration(total_dur)}", style="italic")
 
-            node = tree.root.add(label, expand=True)
+            node = tree.root.add(label, expand=self._expand_level >= 1)
 
             for proj_name in sorted(projects, key=lambda p: -_val(projects[p])):
                 p = projects[proj_name]
@@ -391,7 +407,7 @@ class CostsApp(App):
                 if bar:
                     plabel.append(bar, style="magenta")
 
-                proj_node = node.add(plabel, expand=False)
+                proj_node = node.add(plabel, expand=self._expand_level >= 2)
                 for srow in sorted(
                     p["rows"],
                     key=lambda r: r.get("timestamp", ""),
